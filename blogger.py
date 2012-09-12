@@ -23,9 +23,14 @@ class Blogger:
         self.config["page_title"] = self.config["page_title"].decode("utf-8")
 
         self.db = sqlite3.connect(self.config["engine_dir"] + "blog_data.db")
+        if not self.db:
+            print "Failed to open datatbase"
+            exit()
+
 
     def __del__(self):
         self.db.commit()
+
 
     def AddPost(self, post_file, post_id = None):
         lines = open(post_file,"r").read().decode("utf-8").split("\n")
@@ -65,12 +70,12 @@ class Blogger:
         if not post_id:
             c.execute("""
             INSERT INTO posts (title, body, created, status, keywords, description)
-            VALUES(?, ?, date('now'), ?, ?, ?)""", \
+            VALUES(?, ?, date('now'), ?, ?, ?)""",
             ( post_title, post_body, 1, post_keywords, ""))
             self.add_tags(post_tags, c.lastrowid)
         else:
             c.execute("""
-            UPDATE posts SET title = ? , body = ?, created = date('now'), keywords = ?, need_update = 1 WHERE id = ?""",\
+            UPDATE posts SET title = ? , body = ?, created = date('now'), keywords = ?, need_update = 1 WHERE id = ?""",
             ( post_title, post_body, post_keywords, post_id))
 
 
@@ -87,6 +92,7 @@ class Blogger:
             else:
                 c.execute("INSERT INTO post_tags (post_id, tag_id) VALUES(?,?)", (post_id, tag_data[0],))
 
+
     def GetPosts(self):
         for post in self.get_all_posts():
             deleted = "+"
@@ -97,11 +103,8 @@ class Blogger:
 
 
     def DeletePost(self, post_id):
-        if self.entries[int(post_id)]["deleted"] != 1:
-            self.entries[int(post_id)]["deleted"] = 1
-        else:
-            self.entries[int(post_id)]["deleted"] = 0
-        self.StoreEntries()
+        c = self.db.cursor()
+        c.execute("DELETE FROM posts WHERE id = ?", (post_id))
 
 
     def EditPost(self, post_id, outfile = None):
@@ -125,7 +128,6 @@ class Blogger:
             print post_tpl
 
 
-
     def UpdatePost(self, post_id, new_file):
         self.AddPost(new_file, post_id)
 
@@ -136,8 +138,6 @@ class Blogger:
         self.env.cache.clear()
 
         self.env.filters['spoil'] = self.post_spoil
-        self.env.filters['body'] = self.post_body
-        self.env.filters['b64'] = base64.b64encode
         self.env.filters['month_name'] = self.month_name
         self.env.filters['get_tags_string'] = self.get_tags_string
 
@@ -179,7 +179,8 @@ class Blogger:
 
         return posts
 
-    def get_deleted_posts(self):
+
+    def get_hidden_posts(self):
         c = self.db.cursor()
         c.execute("SELECT id FROM posts WHERE status == 0")
         posts = list()
@@ -187,6 +188,7 @@ class Blogger:
             posts.append(post[0])
 
         return posts
+
 
     def get_updated_posts(self):
         c = self.db.cursor()
@@ -315,6 +317,7 @@ class Blogger:
                 f = open(month_file, "w")
                 f.write(tpl.render({ "month": month,
                                      "year" : year,
+                                     "title": self.config["page_title"],
                                      "tags" : self.tagmap,
                                      "hrono" : self.hronomap,
                                      "posts" : self.get_posts_for_month(year, month) }).encode("utf-8"))
@@ -345,7 +348,6 @@ class Blogger:
         f.close()
 
 
-    # todo: сделать аплоад по ftp
     def UploadBlog(self):
         self.ftp = FTP(self.config["ftp_host"])
         if not self.ftp.login(self.config["ftp_user"], self.config["ftp_pass"]):
@@ -393,7 +395,7 @@ class Blogger:
         # удаляем нужные посты
         print "Deleting marked posts"
         exist_hash = dict([ ( x, True) for x in self.ftp.nlst() ])
-        for post in self.get_deleted_posts():
+        for post in self.get_hidden_posts():
             if exist_hash.has_key(str(post) + ".html"):
                 self.ftp.delete(str(post) + ".html")
 
@@ -428,6 +430,8 @@ class Blogger:
         self.ftp_try_cd("js")
         tmp_list = glob.glob(self.config["blog_dir"] + "js/*")
         for upfile in tmp_list:
+            if upfile.find("jquery") != -1:
+                continue
             self.ftp_upload_file(upfile, upfile[upfile.rindex("/")+1:])
         self.ftp_try_cd("..")
        
@@ -487,12 +491,6 @@ class Blogger:
         else:
             return post_body
 
-    def post_body(self, post_file):
-        f = open(self.config["engine_dir"] + "/" + post_file,"r")
-        value = f.read().decode("utf-8")
-        f.close()
-
-        return value
 
     def pagination(self, page, post_count, per_page):
         pages = post_count / per_page;
